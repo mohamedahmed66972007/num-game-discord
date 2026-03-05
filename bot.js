@@ -60,12 +60,38 @@ client.on('messageCreate', async (message) => {
 
   const content = message.content.trim();
 
+  // أمر المعلومات
+  if (content === '!معلومات') {
+    const embed = new EmbedBuilder()
+      .setColor('#0099ff')
+      .setTitle('ℹ️ معلومات لعبة الأرقام')
+      .setDescription(
+        `**وصف اللعبة:** تخمين الرقم السري قبل انتهاء الوقت أو نفاد المحاولات.\n\n` +
+        `**الأوامر:**\n` +
+        '`!لعبة <عدد الأرقام> <الدقائق> <المحاولات>` - تبدأ لعبة خاصة بك\n' +
+        '`!لعبة <عدد الأرقام> <الدقائق> <المحاولات> *` - تبدأ لعبة عامة يمكن لأي شخص المشاركة\n' +
+        '`!معلومات` - عرض هذه الرسالة\n\n' +
+        `**مثال:**\n` +
+        '`!لعبة 4 2 10` → لعبة خاصة\n' +
+        '`!لعبة 3 1 5 *` → لعبة عامة'
+      );
+    return message.reply({ embeds: [embed] });
+  }
+
+  // أمر بدء اللعبة
   if (content.startsWith('!لعبة')) {
 
     const args = content.split(' ');
 
+    // التحقق من النجمة لجعل اللعبة عامة
+    let isPublic = false;
+    if (args[args.length - 1] === '*') {
+      isPublic = true;
+      args.pop();
+    }
+
     if (args.length < 4) {
-      return message.reply('مثال:\n`!لعبة 4 1 10`\n4 = عدد الأرقام\n1 = الدقائق\n10 = المحاولات');
+      return message.reply('مثال:\n`!لعبة 4 1 10`\n4 = عدد الأرقام\n1 = الدقائق\n10 = المحاولات\nاستخدم * لجعل اللعبة عامة');
     }
 
     const length = parseInt(args[1]);
@@ -87,9 +113,9 @@ client.on('messageCreate', async (message) => {
     const secret = generateRandomNumber(length);
 
     const timeout = setTimeout(() => {
-      if (games.has(message.author.id)) {
-        games.delete(message.author.id);
-
+      const gameId = isPublic ? message.channel.id : message.author.id;
+      if (games.has(gameId)) {
+        games.delete(gameId);
         message.channel.send({
           embeds: [
             new EmbedBuilder()
@@ -101,14 +127,18 @@ client.on('messageCreate', async (message) => {
       }
     }, minutes * 60000);
 
-    games.set(message.author.id, {
+    const gameId = isPublic ? message.channel.id : message.author.id;
+
+    games.set(gameId, {
+      ownerId: message.author.id,
       secret,
       length,
       attempts: 0,
       maxAttempts,
       startTime: Date.now(),
       minutes,
-      timeout
+      timeout,
+      isPublic
     });
 
     const embed = new EmbedBuilder()
@@ -117,15 +147,21 @@ client.on('messageCreate', async (message) => {
       .setDescription(
         `**عدد الخانات:** ${length}\n` +
         `**الوقت:** ${minutes} دقيقة\n` +
-        `**المحاولات:** ${maxAttempts}`
+        `**المحاولات:** ${maxAttempts}\n` +
+        `**نوع اللعبة:** ${isPublic ? 'عام للجميع' : 'خاص بك'}`
       );
 
-    await message.reply({ embeds: [embed] });
+    return message.reply({ embeds: [embed] });
   }
 
-  else if (/^\d+$/.test(content) && games.has(message.author.id)) {
+  // استقبال التخمين
+  else if (/^\d+$/.test(content)) {
+    const game = games.get(message.author.id) || games.get(message.channel.id);
+    if (!game) return;
 
-    const game = games.get(message.author.id);
+    // إذا اللعبة خاصة فقط صاحبها يمكنه اللعب
+    if (!game.isPublic && message.author.id !== game.ownerId) return;
+
     const guess = content;
 
     if (guess.length !== game.length) {
@@ -141,7 +177,8 @@ client.on('messageCreate', async (message) => {
 
     if (guess === game.secret) {
       clearTimeout(game.timeout);
-      games.delete(message.author.id);
+      const gameId = game.isPublic ? message.channel.id : message.ownerId;
+      games.delete(gameId);
 
       return message.reply({
         embeds: [
@@ -155,7 +192,8 @@ client.on('messageCreate', async (message) => {
 
     if (remainingAttempts <= 0) {
       clearTimeout(game.timeout);
-      games.delete(message.author.id);
+      const gameId = game.isPublic ? message.channel.id : message.ownerId;
+      games.delete(gameId);
 
       return message.reply({
         embeds: [
@@ -169,20 +207,20 @@ client.on('messageCreate', async (message) => {
 
     const result = checkGuess(game.secret, guess);
 
-const embed = new EmbedBuilder()
-  .setColor('#FFFF00')
-  .setTitle('نتيجة التخمين')
-  .setDescription(
-    `**✅ عدد الأرقام الصحيحة:** ${result.correctDigits}\n` +
-    `**📌 الأرقام الصحيحة في أماكنها الصحيحة:** ${result.correctPlace}\n\n` + // سطر فارغ هنا
-    `🕒 الوقت المتبقي: \`${remainingTime} ثانية\`\n` +
-    `🎯 المحاولة الحالية: \`${game.attempts}\`\n` +
-    `🔢 المحاولات المتبقية: \`${remainingAttempts}\`\n\n` +
-    `_استمر في المحاولة حتى تخمن الرقم الصحيح!_`
-  );
+    const embed = new EmbedBuilder()
+      .setColor('#FFFF00')
+      .setTitle('نتيجة التخمين')
+      .setDescription(
+        `**✅ عدد الأرقام الصحيحة:** ${result.correctDigits}\n` +
+        `**📌 الأرقام الصحيحة في أماكنها الصحيحة:** ${result.correctPlace}\n\n` +
+        `🕒 الوقت المتبقي: \`${remainingTime} ثانية\`\n` +
+        `🎯 المحاولة الحالية: \`${game.attempts}\`\n` +
+        `🔢 المحاولات المتبقية: \`${remainingAttempts}\`\n\n` +
+        `_استمر في المحاولة حتى تخمن الرقم الصحيح!_`
+      );
 
     message.reply({ embeds: [embed] });
   }
-}); 
+});
 
 client.login(process.env.DISCORD_TOKEN);
